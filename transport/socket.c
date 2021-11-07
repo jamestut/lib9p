@@ -38,6 +38,7 @@
 # include <sys/endian.h>
 #endif
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <sys/event.h>
 #include <sys/uio.h>
 #include <netdb.h>
@@ -55,6 +56,7 @@ struct l9p_socket_softc
 	int ls_fd;
 };
 
+static int l9p_start_server(struct l9p_server *server, int* s_arr, int s_len);
 static int l9p_socket_readmsg(struct l9p_socket_softc *, void **, size_t *);
 static int l9p_socket_get_response_buffer(struct l9p_request *,
     struct iovec *, size_t *, void *);
@@ -67,57 +69,84 @@ static ssize_t xread(int, void *, size_t);
 static ssize_t xwrite(int, void *, size_t);
 
 int
-l9p_start_server(struct l9p_server *server, const char *host, const char *port)
+l9p_start_server_tcp(struct l9p_server *server, const char *host, const char *port)
 {
-	struct addrinfo *res, *res0, hints;
-	struct kevent kev[2];
-	struct kevent event[2];
-	int err, kq, i, val, evs, nsockets = 0;
-	int sockets[2];
+	int err, val;
+	struct addrinfo *res0, hints;
+
+	// IPv4 and IPv6
+	int s_arr[2];
 
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_family = PF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
-	err = getaddrinfo(host, port, &hints, &res0);
 
+	err = getaddrinfo(host, port, &hints, &res0);
 	if (err)
 		return (-1);
 
-	for (res = res0; res; res = res->ai_next) {
-		int s = socket(res->ai_family, res->ai_socktype,
-		    res->ai_protocol);
+	int s_idx = 0;
+	for (struct addrinfo *res = res0; res && s_idx < 2; res = res->ai_next) {
+		int s = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+		if (s < 0)
+			continue;
 
 		val = 1;
 		setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val));
-
-		if (s < 0)
-			continue;
 
 		if (bind(s, res->ai_addr, res->ai_addrlen) < 0) {
 			close(s);
 			continue;
 		}
 
-		sockets[nsockets] = s;
-		EV_SET(&kev[nsockets++], s, EVFILT_READ, EV_ADD | EV_ENABLE, 0,
-		    0, 0);
+		s_arr[s_idx++] = s;
+	}
+
+	return l9p_start_server(server, s_arr, s_idx);
+}
+
+int
+l9p_start_server_uds(struct l9p_server *server, const char *socketpath)
+{
+	struct sockaddr_un addr;
+	int s = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (s < 0)
+		return -1;
+
+	addr.sun_family = AF_UNIX;
+	strncpy(addr.sun_path, socketpath, sizeof(addr.sun_path));
+
+	if (bind(s, (struct sockaddr *)&addr, sizeof(addr)) < 0)
+		return -1;
+
+	return l9p_start_server(server, &s, 1);
+}
+
+static int
+l9p_start_server(struct l9p_server *server, int* s_arr, int s_len)
+{
+	struct kevent kev[2];
+	struct kevent event[2];
+	int kq, i, evs;
+
+	if (s_len > 2)
+		s_len = 2;
+
+	for (int i = 0; i < s_len; ++i) {
+		const int s = s_arr[i];
+		EV_SET(kev + i, s, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, 0);
 		listen(s, 10);
 	}
 
-	if (nsockets < 1) {
+	if (s_len < 1) {
 		L9P_LOG(L9P_ERROR, "bind(): %s", strerror(errno));
 		return(-1);
 	}
 
 	kq = kqueue();
 
-	if (kevent(kq, kev, nsockets, NULL, 0, NULL) < 0) {
-		L9P_LOG(L9P_ERROR, "kevent(): %s", strerror(errno));
-		return (-1);
-	}
-
 	for (;;) {
-		evs = kevent(kq, NULL, 0, event, nsockets, NULL);
+		evs = kevent(kq, kev, s_len, event, s_len, NULL);
 		if (evs < 0) {
 			if (errno == EINTR)
 				continue;
@@ -307,7 +336,7 @@ l9p_socket_send_response(struct l9p_request *req __unused,
 
 static void
 l9p_socket_drop_response(struct l9p_request *req __unused,
-    const struct iovec *iov, size_t niov __unused, void *arg __unused)
+    const struct iovec *iov, size_t niov __unused, void *arg)
 {
 
 	L9P_LOG(L9P_DEBUG, "%p: drop buf=%p", arg, iov[0].iov_base);

@@ -34,6 +34,14 @@
 #include "../backend/fs.h"
 #include "../transport/socket.h"
 
+void
+print_usage()
+{
+	puts("Usage:");
+	puts("  server -t [-h <host>] [-p <port>] [-r] <path>");
+	puts("  server -u <unix_socket_path> [-r] <path>");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -41,13 +49,22 @@ main(int argc, char **argv)
 	struct l9p_server *server;
 	char *host = "0.0.0.0";
 	char *port = "564";
+	char *socketpath = NULL;
 	char *path;
 	bool ro = false;
+	bool tcp = false;
 	int rootfd;
 	int opt;
+	int ret;
 
-	while ((opt = getopt(argc, argv, "h:p:r")) != -1) {
+	while ((opt = getopt(argc, argv, "tu:h:p:r")) != -1) {
 		switch (opt) {
+		case 't':
+			tcp = true;
+			break;
+		case 'u':
+			socketpath = optarg;
+			break;
 		case 'h':
 			host = optarg;
 			break;
@@ -64,8 +81,12 @@ main(int argc, char **argv)
 	}
 
 	if (optind >= argc) {
-usage:
-		errx(1, "Usage: server [-h <host>] [-p <port>] [-r] <path>");
+		goto usage;
+	}
+
+	// can only activate either UDS or TCP, not both
+	if (tcp && socketpath) {
+		goto usage;
 	}
 
 	path = argv[optind];
@@ -81,9 +102,22 @@ usage:
 		err(1, "cannot create server");
 
 	server->ls_max_version = L9P_2000L;
-	if (l9p_start_server(server, host, port))
+
+	if (tcp)
+		ret = l9p_start_server_tcp(server, host, port);
+	else if (socketpath)
+		ret = l9p_start_server_uds(server, socketpath);
+	else
+		goto usage;
+	if (ret)
 		err(1, "l9p_start_server() failed");
 
 	/* XXX - we never get here, l9p_start_server does not return */
 	exit(0);
+
+usage:
+	puts("Usage:");
+	puts("  server -t [-h <host>] [-p <port>] [-r] <path>");
+	puts("  server -u <unix_socket_path> [-r] <path>");
+	return 0;
 }

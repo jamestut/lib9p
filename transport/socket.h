@@ -32,8 +32,9 @@
 #include <sys/socket.h>
 #include "../lib9p.h"
 
-int l9p_start_server(struct l9p_server *server, const char *host,
+int l9p_start_server_tcp(struct l9p_server *server, const char *host,
     const char *port);
+int l9p_start_server_uds(struct l9p_server *server, const char *socketpath);
 void l9p_socket_accept(struct l9p_server *server, int conn_fd,
     struct sockaddr *client_addr, socklen_t client_addr_len);
 
