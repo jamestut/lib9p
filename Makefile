@@ -33,7 +33,8 @@ endif
 CFLAGS := $(WFLAGS) \
  	-O2
 
-LIB_SRCS := \
+SERVER_SRCS := \
+	example/server.c \
 	pack.c \
 	connection.c \
 	request.c \
@@ -47,22 +48,14 @@ LIB_SRCS := \
 	transport/socket.c \
 	backend/fs.c
 
-SERVER_SRCS := \
-	example/server.c
-
 BUILD_DIR := build
-LIB_OBJS := $(addprefix build/,$(LIB_SRCS:.c=.o))
-SERVER_OBJS := $(SERVER_SRCS:.c=.o)
-LIB := lib9p.dylib
+SERVER_OBJS := $(addprefix build/,$(SERVER_SRCS:.c=.o))
 SERVER := server
 
-all: build $(LIB) $(SERVER)
+all: build $(SERVER)
 
-$(LIB): $(LIB_OBJS)
-	cc -dynamiclib $^ -o build/$@
-
-$(SERVER): $(SERVER_OBJS) $(LIB)
-	cc $< -o build/$(SERVER) -Lbuild/ -l9p
+$(SERVER): $(SERVER_OBJS)
+	cc $(SERVER_OBJS) -o build/$(SERVER)
 
 clean:
 	rm -rf build
@@ -72,6 +65,7 @@ build:
 	mkdir build/sbuf
 	mkdir build/transport
 	mkdir build/backend
+	mkdir build/example
 
 build/%.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
